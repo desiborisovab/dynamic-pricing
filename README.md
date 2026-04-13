@@ -2,7 +2,7 @@
 
 An intelligent dynamic pricing system that uses Deep Reinforcement Learning to maximise retail profit by adapting prices to competitor pricing, demand signals, inventory levels, seasonality, and promotions.
 
-**Best result so far: +1050% improvement over fixed baseline pricing** ($4.4M vs −$463k on held-out sample, 20 episodes × 10k rows, Random Forest simulator).
+**Best result so far: +1120% improvement over fixed baseline pricing** ($938k vs −$92k on held-out sample, 40 episodes × 10k rows, Random Forest trained on raw features).
 
 ---
 
@@ -29,27 +29,22 @@ CSV data → data_prep.py → Random Forest simulator
 pip install -r requirements.txt
 ```
 
-For GPU support, install PyTorch with CUDA from https://pytorch.org/get-started/locally/
-
-> **Mac users:** If you see an `xgboost` OpenMP error, run `brew install libomp`. If you don't have Homebrew, use the Random Forest simulator instead (already the default).
-
 ---
 
 ## Quickstart
 
-1. Place `retail_store_inventory.csv` in the project folder
+1. Place `retail_store_inventory.csv` inside a `data/` folder
 2. Run training:
 
 ```
 python train.py
 ```
 
-3. Open `dynamic_pricing_dashboard.html` in a browser to see results
-
 **Outputs after training:**
 - `results.json` — full training history, episode profits, action distributions, eval records
 - `dqn_checkpoint.pt` — saved PyTorch model weights (reloadable)
 - `sim_scaler.pkl` — fitted StandardScaler (required for production inference)
+- `label_encoders.pkl` — fitted LabelEncoders for all categorical features (required for production inference)
 
 ---
 
@@ -57,16 +52,18 @@ python train.py
 
 | File | Description |
 |------|-------------|
-| `data_prep.py` | Loads CSV, cleans data, engineers 14 features, clusters products by category + price tier, trains Random Forest demand simulator |
+| `data_prep.py` | Loads CSV, cleans data, engineers 14 features, clusters products by category + price tier, trains Random Forest demand simulator, saves `sim_scaler.pkl` and `label_encoders.pkl` |
 | `environment.py` | RL pricing environment — 10 price actions (×1.00–×1.225), computes profit reward via simulator |
 | `dqn_agent_pytorch.py` | PyTorch DQN agent — QNetwork (4×30), ReplayBuffer, Double DQN, Adam, gradient clipping, save/load |
 | `dqn_agent.py` | NumPy DQN fallback — identical logic, no PyTorch required |
 | `train.py` | Main entry point — baseline calculation, training loop, greedy eval, saves results |
-| `predict_price.py` | Production inference — load checkpoint and get a price recommendation for any live product |
+| `predict_price.py` | Production inference — loads checkpoint and returns a price recommendation for any live product |
 | `dynamic_pricing_dashboard.html` | Interactive results dashboard — open in any browser |
 | `requirements.txt` | Python dependencies |
 | `results.json` | Generated after training — feeds the dashboard |
 | `dqn_checkpoint.pt` | Generated after training — saved model weights |
+| `sim_scaler.pkl` | Generated after training — StandardScaler fitted on training features |
+| `label_encoders.pkl` | Generated after training — LabelEncoder mappings for category, region, weather, season |
 
 ---
 
@@ -98,7 +95,7 @@ Total parameters: 3,550
 
 | Param | Best Run Value | Description |
 |-------|---------------|-------------|
-| `EPISODES` | 20 | Training episodes (more = better, diminishing returns after ~30) |
+| `EPISODES` | 40 | Training episodes — agent still improving at 40, try 80 |
 | `SAMPLE_SIZE` | 10,000 | Rows sampled per episode from the full dataset |
 | `LR` | 1e-4 | Adam learning rate — lower = more stable convergence |
 | `GAMMA` | 0.95 | Discount factor — weights future vs immediate reward |
@@ -115,7 +112,7 @@ Total parameters: 3,550
 
 In `train.py`, swap the import at the top:
 
-```
+```python
 from dqn_agent_pytorch import DQNAgent   # PyTorch (default, recommended)
 # from dqn_agent import DQNAgent         # NumPy fallback — no install needed
 ```
@@ -124,31 +121,48 @@ from dqn_agent_pytorch import DQNAgent   # PyTorch (default, recommended)
 
 ## Demand Simulator
 
-The RL agent trains inside a **Random Forest** demand simulator (not the real world):
+The RL agent trains inside a **Random Forest** demand simulator (not the real world).
+
+**Critical:** the Random Forest must be trained on **raw (unscaled) features** — trees use threshold comparisons, not feature magnitudes, so scaling adds no benefit and can hurt performance. The `StandardScaler` is still fitted and saved separately for use by the neural network's state input.
 
 ```
-# In data_prep.py — swap simulator here
-from sklearn.ensemble import RandomForestRegressor
-model = RandomForestRegressor(n_estimators=100, max_depth=8, n_jobs=-1, random_state=42)
+# In data_prep.py
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)   # scaler saved for the RL state vector
+X_scaled = np.clip(X_scaled, -10, 10)
 
-# Or with XGBoost (better R², requires libomp on Mac):
-# from xgboost import XGBRegressor
-# model = XGBRegressor(n_estimators=200, max_depth=5, learning_rate=0.1)
+model = RandomForestRegressor(n_estimators=200, max_depth=12, n_jobs=-1, random_state=42)
+model.fit(X, y)   # ← raw features, not X_scaled
 ```
 
 | Simulator | R² | Notes |
 |-----------|-----|-------|
 | Linear Regression | 0.348 | Fast, interpretable, poor at non-linear interactions |
-| Random Forest | ~0.75 | Current default — good balance of accuracy and speed |
+| Random Forest (scaled input) | ~0.371 | Underperforms — do not scale before Random Forest |
+| Random Forest (raw input) | ~0.75+ | **Current default** — correct configuration |
 | XGBoost | ~0.80+ | Best accuracy, requires `brew install libomp` on Mac |
 
 ---
 
 ## Production Inference
 
-To price a product in real time using the trained agent:
+After training, load the checkpoint and saved artefacts to price any product in real time.
+
+**Step 1 — get your exact label encoder mappings** (run once after training):
 
 ```
+python3 -c "
+import pickle
+with open('label_encoders.pkl', 'rb') as f:
+    enc = pickle.load(f)
+for k, v in enc.items():
+    print(k, v)
+"
+```
+
+**Step 2 — call `get_price`:**
+
+```python
 from predict_price import get_price
 
 result = get_price({
@@ -158,7 +172,7 @@ result = get_price({
     "discount": 20,
     "holiday_promotion": 0,
     "date": "2026-03-08",
-    "category": "Toys",
+    "category": "Toys",      # must match exact strings from your dataset
     "region": "North",
     "weather": "Rainy",
     "season": "Spring"
@@ -166,25 +180,19 @@ result = get_price({
 # → {"recommended_price": 21.61, "effective_price": 17.29, "action": 3, "multiplier": 1.075}
 ```
 
-> **Important:** Run `train.py` once with `sim_scaler.pkl` saving enabled before using `predict_price.py`. The scaler must match the one used during training.
+> **Important:** `sim_scaler.pkl` and `label_encoders.pkl` must come from the same training run as `dqn_checkpoint.pt`. Mixing artefacts from different runs will produce wrong prices.
 
 ---
 
 ## Results
 
-| Run | Episodes | Sample Size | Simulator | Eval Profit | Improvement |
-|-----|----------|-------------|-----------|-------------|-------------|
-| v1 (NumPy) | 8 | 3,000 | Linear Regression | $452k | +416% |
-| v2 (PyTorch) | 8 | 3,000 | Linear Regression | $1.1M | +872% |
-| v3 (PyTorch) | 20 | 10,000 | Random Forest | $4.4M | **+1051%** |
+| Run | Episodes | Sample Size | Simulator | Loss | Eval Profit | Improvement |
+|-----|----------|-------------|-----------|------|-------------|-------------|
+| v1 (NumPy) | 8 | 3,000 | Linear Regression | ~37 | $452k | +416% |
+| v2 (PyTorch) | 8 | 3,000 | Linear Regression | ~0.37 | $1.1M | +872% |
+| v3 (PyTorch) | 20 | 10,000 | Random Forest (scaled) | ~0.33 | $4.4M | +1051% |
+| v4 (PyTorch) | 40 | 10,000 | **Random Forest (raw)** | **~0.01** | **$938k** | **+1120%** |
+
+> Note: v4 absolute profit is lower than v3 because the corrected simulator gives more realistic (conservative) demand estimates. The v3 numbers were inflated by the noisy scaled-input simulator. v4 loss of 0.01 vs 0.33 confirms the agent is learning a much tighter, more accurate Q-function.
 
 ---
-
-## Next Steps
-
-- **Train longer:** `EPISODES = 40` — loss was still declining at episode 20
-- **Wider network:** increase hidden layers from 30 → 64 or 128 nodes
-- **Add discount to action space:** let the agent also choose the discount level
-- **Per-cluster agents:** train separate agents per product category + price tier
-- **Deploy as API:** wrap `predict_price.py` in Flask for real-time pricing endpoint
-- **Retrain monthly:** roll the training window forward with fresh data to keep the agent current

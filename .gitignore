@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+
+# Model artefacts — large files, stored in Azure Blob instead
+*.pt
+*.pkl
+results.json
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+*.pyo
+
+# Data — too large for git
+data/
+
+# macOS
+.DS_Store
