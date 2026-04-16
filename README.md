@@ -25,9 +25,13 @@ CSV data → data_prep.py → Random Forest simulator
 
 ## Setup
 
-```
+
 pip install -r requirements.txt
-```
+
+
+For GPU support, install PyTorch with CUDA from https://pytorch.org/get-started/locally/
+
+> **Mac users:** If you see an `xgboost` OpenMP error, run `brew install libomp`. If you don't have Homebrew, use the Random Forest simulator instead (already the default).
 
 ---
 
@@ -36,9 +40,9 @@ pip install -r requirements.txt
 1. Place `retail_store_inventory.csv` inside a `data/` folder
 2. Run training:
 
-```
 python train.py
-```
+
+3. Open `dynamic_pricing_dashboard.html` in a browser to see results
 
 **Outputs after training:**
 - `results.json` — full training history, episode profits, action distributions, eval records
@@ -112,10 +116,10 @@ Total parameters: 3,550
 
 In `train.py`, swap the import at the top:
 
-```python
+
 from dqn_agent_pytorch import DQNAgent   # PyTorch (default, recommended)
 # from dqn_agent import DQNAgent         # NumPy fallback — no install needed
-```
+
 
 ---
 
@@ -125,7 +129,7 @@ The RL agent trains inside a **Random Forest** demand simulator (not the real wo
 
 **Critical:** the Random Forest must be trained on **raw (unscaled) features** — trees use threshold comparisons, not feature magnitudes, so scaling adds no benefit and can hurt performance. The `StandardScaler` is still fitted and saved separately for use by the neural network's state input.
 
-```
+
 # In data_prep.py
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)   # scaler saved for the RL state vector
@@ -133,7 +137,6 @@ X_scaled = np.clip(X_scaled, -10, 10)
 
 model = RandomForestRegressor(n_estimators=200, max_depth=12, n_jobs=-1, random_state=42)
 model.fit(X, y)   # ← raw features, not X_scaled
-```
 
 | Simulator | R² | Notes |
 |-----------|-----|-------|
@@ -150,7 +153,7 @@ After training, load the checkpoint and saved artefacts to price any product in 
 
 **Step 1 — get your exact label encoder mappings** (run once after training):
 
-```
+
 python3 -c "
 import pickle
 with open('label_encoders.pkl', 'rb') as f:
@@ -158,11 +161,11 @@ with open('label_encoders.pkl', 'rb') as f:
 for k, v in enc.items():
     print(k, v)
 "
-```
+
 
 **Step 2 — call `get_price`:**
 
-```python
+
 from predict_price import get_price
 
 result = get_price({
@@ -178,7 +181,7 @@ result = get_price({
     "season": "Spring"
 })
 # → {"recommended_price": 21.61, "effective_price": 17.29, "action": 3, "multiplier": 1.075}
-```
+
 
 > **Important:** `sim_scaler.pkl` and `label_encoders.pkl` must come from the same training run as `dqn_checkpoint.pt`. Mixing artefacts from different runs will produce wrong prices.
 
@@ -196,3 +199,159 @@ result = get_price({
 > Note: v4 absolute profit is lower than v3 because the corrected simulator gives more realistic (conservative) demand estimates. The v3 numbers were inflated by the noisy scaled-input simulator. v4 loss of 0.01 vs 0.33 confirms the agent is learning a much tighter, more accurate Q-function.
 
 ---
+
+## Next Steps
+
+- **Train longer:** `EPISODES = 80` — loss and profit were still trending upward at episode 40
+- **Wider network:** increase hidden layers from 30 → 128 nodes for more Q-function capacity
+- **Larger buffer:** `BUFFER_SIZE = 100_000` — now that loss is stable at 0.01
+- **Add discount to action space:** let the agent also choose the discount level
+- **Per-cluster agents:** train separate agents per product category + price tier
+- **Deploy as API:** wrap `predict_price.py` in Flask for real-time pricing endpoint
+- **Retrain monthly:** roll the training window forward with fresh data to keep the agent current
+
+---
+
+## Azure Deployment
+
+### Architecture
+
+```
+Local machine                    Azure
+─────────────                    ─────────────────────────────────────
+python train.py
+       ↓
+  dqn_checkpoint.pt  ──────→  Blob Storage (dynamic-pricing-model)
+  sim_scaler.pkl                       ↓
+  label_encoders.pkl           Container Registry (Docker image)
+  results.json                         ↓
+                               Container Apps (Flask API)
+                                         ↓
+                               https://<your-app>.azurecontainerapps.io
+```
+
+### Prerequisites
+
+
+# Install Azure CLI (Mac)
+brew install azure-cli
+
+# Install Docker
+brew install --cask docker
+
+# Log in to Azure
+az login
+
+
+### First Deployment
+
+
+# 1. Train the model locally first
+python train.py
+
+# 2. Make the deploy script executable
+chmod +x azure/deploy.sh
+
+# 3. Edit the config variables at the top of azure/deploy.sh
+#    (STORAGE_ACCOUNT and ACR_NAME must be globally unique)
+
+# 4. Deploy everything
+./azure/deploy.sh
+
+
+This will:
+- Create a Resource Group, Storage Account, and Blob container
+- Upload your model artefacts to Blob Storage
+- Build a Docker image and push it to Azure Container Registry
+- Deploy the API as an Azure Container App with public HTTPS endpoint
+
+### Redeploy After Retraining
+
+
+python train.py          # retrain locally
+./azure/redeploy.sh      # upload new artefacts + restart API
+
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Liveness check — returns model version and load time |
+| `GET` | `/info` | Valid categories, regions, weather, seasons, multipliers |
+| `POST` | `/price` | Price recommendation for one product |
+| `POST` | `/price/batch` | Price recommendations for up to 500 products |
+
+### Example Request
+
+
+curl -X POST https://<your-app>.azurecontainerapps.io/price \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_id":        "P0042",
+    "current_price":     33.50,
+    "competitor_price":  29.69,
+    "inventory_level":   231,
+    "discount":          20,
+    "holiday_promotion": 0,
+    "date":              "2026-04-13",
+    "category":          "Toys",
+    "region":            "North",
+    "weather":           "Rainy",
+    "season":            "Spring"
+  }'
+
+
+### Example Response
+
+
+{
+  "product_id":        "P0042",
+  "recommended_price": 21.61,
+  "effective_price":   17.29,
+  "base_cost":         20.10,
+  "action":            3,
+  "multiplier":        1.075,
+  "model_version":     "latest",
+  "priced_at":         "2026-04-13T10:23:41.123456"
+}
+
+
+### Test the API
+
+
+# Against deployed Azure API (reads API_URL from .env)
+python azure/test_api.py
+
+# Against local API
+API_URL=http://localhost:8000 python azure/test_api.py
+
+
+### Run API Locally (before deploying)
+
+
+pip install -r requirements_api.txt
+cp .env.template .env          # fill in your connection string
+python api/app.py
+
+
+### Azure Files
+
+| File | Description |
+|------|-------------|
+| `azure/deploy.sh` | One-shot script — creates all Azure resources and deploys the API |
+| `azure/redeploy.sh` | Quick redeploy — uploads new artefacts and restarts the API |
+| `azure/upload_artefacts.py` | Uploads model artefacts to Blob Storage after training |
+| `azure/test_api.py` | Tests all API endpoints against local or deployed API |
+| `api/app.py` | Flask API — `/health`, `/info`, `/price`, `/price/batch` |
+| `api/Dockerfile` | Containerises the API |
+| `requirements_api.txt` | API-only dependencies (no training libs) |
+| `.env.template` | Template for environment variables — copy to `.env` |
+
+### Estimated Azure Costs
+
+| Resource | SKU | Est. Monthly Cost |
+|----------|-----|-------------------|
+| Storage Account | Standard LRS | ~$0.02/GB |
+| Container Registry | Basic | ~$5/month |
+| Container Apps | 0.5 CPU / 1GB RAM, 1 replica | ~$10–15/month |
+| **Total** | | **~$15–20/month** |
