@@ -1,0 +1,124 @@
+name: Build and Deploy Dynamic Pricing API
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'api/**'
+      - 'dqn_agent_pytorch.py'
+      - 'requirements_api.txt'
+      - '.github/workflows/deploy.yml'
+
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+env:
+  IMAGE_NAME: dynamic-pricing-api
+  CONTAINER_APP_NAME: dynamic-pricing-api
+  CONTAINER_APP_ENV: dynamic-pricing-env
+  RESOURCE_GROUP: dynamic-pricing-rg
+  LOCATION: eastus
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Log in to Azure
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Log in to Container Registry
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}
+          username: ${{ secrets.AZURE_REGISTRY_USERNAME }}
+          password: ${{ secrets.AZURE_REGISTRY_PASSWORD }}
+
+      # Build and push Docker image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: api/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # Create Container App Environment (if not exists)
+      - name: Create Container App Environment
+        run: |
+          exists=$(az containerapp env show \
+            --name ${{ env.CONTAINER_APP_ENV }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query name --output tsv 2>/dev/null || echo "")
+
+          if [ -z "$exists" ]; then
+            echo "Creating Container App Environment..."
+            az containerapp env create \
+              --name ${{ env.CONTAINER_APP_ENV }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --location ${{ env.LOCATION }}
+          else
+            echo "Container App Environment already exists — skipping."
+          fi
+
+      # Deploy or update Container App
+      - name: Deploy Container App
+        run: |
+          exists=$(az containerapp show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query name --output tsv 2>/dev/null || echo "")
+
+          if [ -z "$exists" ]; then
+            echo "Creating Container App..."
+            az containerapp create \
+              --name ${{ env.CONTAINER_APP_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --environment ${{ env.CONTAINER_APP_ENV }} \
+              --image ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              --registry-server ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }} \
+              --registry-username ${{ secrets.AZURE_REGISTRY_USERNAME }} \
+              --registry-password ${{ secrets.AZURE_REGISTRY_PASSWORD }} \
+              --target-port 8000 \
+              --ingress external \
+              --min-replicas 0 \
+              --max-replicas 3 \
+              --cpu 0.5 \
+              --memory 1.0Gi \
+              --env-vars \
+                "AZURE_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+                "MODEL_VERSION=latest" \
+                "PORT=8000"
+          else
+            echo "Updating existing Container App..."
+            az containerapp update \
+              --name ${{ env.CONTAINER_APP_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          fi
+
+      # Print API URL
+      - name: Get API URL
+        run: |
+          API_URL=$(az containerapp show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          echo ""
+          echo "=================================================="
+          echo "  Deployment complete!"
+          echo "  API URL: https://$API_URL"
+          echo "  Health:  https://$API_URL/health"
+          echo "  Info:    https://$API_URL/info"
+          echo "=================================================="
