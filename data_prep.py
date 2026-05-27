@@ -84,7 +84,7 @@ def build_env_simulator(df):
     with open("sim_scaler.pkl", "wb") as f:
         pickle.dump(scaler, f)
 
-    preds = model.predict(X_scaled)
+    preds = model.predict(X)
     mae = mean_absolute_error(y, preds)
     r2 = r2_score(y, preds)
     print(f"  Simulator  MAE={mae:.2f}  R²={r2:.3f}")
