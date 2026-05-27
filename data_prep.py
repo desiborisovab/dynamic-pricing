@@ -40,14 +40,9 @@ def engineer_features(df):
     df["revenue"] = df["effective_price"] * df["units_sold"]
 
     # Encode categoricals
-    encoders = {}
     le = LabelEncoder()
     for col in ["category", "region", "weather_condition", "seasonality", "store_id"]:
         df[col + "_enc"] = le.fit_transform(df[col].astype(str))
-        encoders[col] = dict(zip(le.classes_, le.transform(le.classes_)))
-
-    with open("label_encoders.pkl", "wb") as f:
-        pickle.dump(encoders, f)
 
     return df
 
@@ -89,7 +84,7 @@ def build_env_simulator(df):
     with open("sim_scaler.pkl", "wb") as f:
         pickle.dump(scaler, f)
 
-    preds = model.predict(X)
+    preds = model.predict(X_scaled)
     mae = mean_absolute_error(y, preds)
     r2 = r2_score(y, preds)
     print(f"  Simulator  MAE={mae:.2f}  R²={r2:.3f}")
