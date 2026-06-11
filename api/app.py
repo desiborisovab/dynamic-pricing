@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from flask import Flask, request, jsonify
 
-# ── Logging ───────────────────────────────────────────────────────────────────
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s"
@@ -36,14 +36,14 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ── Global model state ────────────────────────────────────────────────────────
+# Global model state
 MODEL = {
-    "agent":          None,
-    "scaler":         None,
-    "encoders":       None,
-    "multipliers":    None,
-    "version":        None,
-    "loaded_at":      None,
+    "agent": None,
+    "scaler": None,
+    "encoders": None,
+    "multipliers": None,
+    "version": None,
+    "loaded_at": None,
 }
 
 CONTAINER_NAME = "dynamic-pricing-model"
@@ -53,7 +53,7 @@ MULTIPLIERS    = [1.000, 1.025, 1.050, 1.075, 1.100,
                   1.125, 1.150, 1.175, 1.200, 1.225]
 
 
-# ── Model loading ─────────────────────────────────────────────────────────────
+#Model loading
 def _download_blob(blob_service, version: str, filename: str) -> bytes:
     blob_client = blob_service.get_blob_client(
         container=CONTAINER_NAME,
@@ -109,23 +109,23 @@ def load_model(version: str = None):
     log.info(f"Model loaded successfully (version={version})")
 
 
-# ── Feature builder ───────────────────────────────────────────────────────────
+# Feature builder
 def build_state(product: dict) -> np.ndarray:
     """Convert a raw product dict into the 14-feature state vector."""
     from datetime import datetime as dt
 
-    enc      = MODEL["encoders"]
-    scaler   = MODEL["scaler"]
+    enc = MODEL["encoders"]
+    scaler = MODEL["scaler"]
 
-    date     = dt.strptime(product["date"], "%Y-%m-%d")
-    price    = float(product["current_price"])
-    comp     = float(product["competitor_price"])
+    date = dt.strptime(product["date"], "%Y-%m-%d")
+    price = float(product["current_price"])
+    comp = float(product["competitor_price"])
     discount = float(product["discount"])
 
-    cat     = product["category"]
-    region  = product["region"]
+    cat = product["category"]
+    region = product["region"]
     weather = product["weather"]
-    season  = product["season"]
+    season = product["season"]
 
     # Validate categorical values
     for key, val, enc_key in [
@@ -147,8 +147,8 @@ def build_state(product: dict) -> np.ndarray:
         date.weekday(),
         date.month,
         (date.month - 1) // 3 + 1,
-        price / (comp + 1e-9),               # price_ratio
-        price * (1 - discount / 100),        # effective_price
+        price / (comp + 1e-9),
+        price * (1 - discount / 100),
         enc["category"][cat],
         enc["region"][region],
         enc["weather_condition"][weather],
@@ -158,41 +158,41 @@ def build_state(product: dict) -> np.ndarray:
     return scaler.transform(features)[0]
 
 
-# ── Pricing logic ─────────────────────────────────────────────────────────────
+# Pricing logic
 def price_product(product: dict) -> dict:
-    agent      = MODEL["agent"]
+    agent = MODEL["agent"]
     multipliers = MODEL["multipliers"]
 
-    state      = build_state(product)
-    action     = agent.act(state, training=False)
+    state = build_state(product)
+    action = agent.act(state, training=False)
     multiplier = multipliers[action]
 
-    base_cost  = float(product["current_price"]) * 0.60
-    new_price  = base_cost * multiplier
-    discount   = float(product["discount"])
-    eff_price  = new_price * (1 - discount / 100)
+    base_cost = float(product["current_price"]) * 0.60
+    new_price = base_cost * multiplier
+    discount = float(product["discount"])
+    eff_price = new_price * (1 - discount / 100)
 
     return {
-        "product_id":          product.get("product_id", "unknown"),
-        "recommended_price":   round(new_price, 2),
-        "effective_price":     round(eff_price, 2),
-        "base_cost":           round(base_cost, 2),
-        "action":              int(action),
-        "multiplier":          multiplier,
-        "model_version":       MODEL["version"],
-        "priced_at":           datetime.utcnow().isoformat(),
+        "product_id": product.get("product_id", "unknown"),
+        "recommended_price": round(new_price, 2),
+        "effective_price": round(eff_price, 2),
+        "base_cost": round(base_cost, 2),
+        "action": int(action),
+        "multiplier": multiplier,
+        "model_version": MODEL["version"],
+        "priced_at": datetime.utcnow().isoformat(),
     }
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+#Routes
 @app.get("/health")
 def health():
     if MODEL["agent"] is None:
         return jsonify({"status": "unavailable", "reason": "model not loaded"}), 503
     return jsonify({
-        "status":       "ok",
+        "status": "ok",
         "model_version": MODEL["version"],
-        "loaded_at":    MODEL["loaded_at"],
+        "loaded_at": MODEL["loaded_at"],
     })
 
 
@@ -203,14 +203,14 @@ def info():
 
     enc = MODEL["encoders"]
     return jsonify({
-        "model_version":  MODEL["version"],
-        "loaded_at":      MODEL["loaded_at"],
-        "n_actions":      N_ACTIONS,
+        "model_version": MODEL["version"],
+        "loaded_at": MODEL["loaded_at"],
+        "n_actions": N_ACTIONS,
         "price_multipliers": MULTIPLIERS,
         "valid_categories": list(enc["category"].keys()),
-        "valid_regions":    list(enc["region"].keys()),
-        "valid_weather":    list(enc["weather_condition"].keys()),
-        "valid_seasons":    list(enc["seasonality"].keys()),
+        "valid_regions": list(enc["region"].keys()),
+        "valid_weather": list(enc["weather_condition"].keys()),
+        "valid_seasons": list(enc["seasonality"].keys()),
     })
 
 
@@ -282,7 +282,7 @@ def price_batch():
         return jsonify({"error": "batch size limit is 500"}), 400
 
     results = []
-    errors  = []
+    errors = []
     for i, product in enumerate(products):
         try:
             results.append(price_product(product))
@@ -290,11 +290,11 @@ def price_batch():
             errors.append({"index": i, "product_id": product.get("product_id"), "error": str(e)})
 
     return jsonify({
-        "results":       results,
-        "errors":        errors,
-        "total":         len(products),
-        "succeeded":     len(results),
-        "failed":        len(errors),
+        "results": results,
+        "errors": errors,
+        "total": len(products),
+        "succeeded": len(results),
+        "failed": len(errors),
         "model_version": MODEL["version"],
     })
 

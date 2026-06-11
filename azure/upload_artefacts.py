@@ -1,8 +1,5 @@
 """
 azure/upload_artefacts.py
-
-Run this after train.py to push all model artefacts to Azure Blob Storage.
-
 Usage:
     python azure/upload_artefacts.py
 
@@ -25,9 +22,9 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # .env optional — can use real env vars
+    pass
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 CONTAINER_NAME = "dynamic-pricing-model"
 
 ARTEFACTS = [
@@ -37,7 +34,7 @@ ARTEFACTS = [
     "results.json",
 ]
 
-# ── Upload ────────────────────────────────────────────────────────────────────
+# Upload
 def upload_artefacts(version: str = None):
     conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     if not conn_str:
@@ -73,15 +70,15 @@ def upload_artefacts(version: str = None):
                 blob_client.upload_blob(f, overwrite=True)
 
         size_kb = path.stat().st_size / 1024
-        print(f"  OK    {filename}  ({size_kb:.1f} KB)")
+        print(f" OK {filename}  ({size_kb:.1f} KB)")
         uploaded.append(filename)
 
     print("-" * 45)
-    print(f"  {len(uploaded)}/{len(ARTEFACTS)} files uploaded")
-    print(f"  Versioned path : {CONTAINER_NAME}/{version}/")
-    print(f"  Latest path    : {CONTAINER_NAME}/latest/")
+    print(f" {len(uploaded)}/{len(ARTEFACTS)} files uploaded")
+    print(f" Versioned path : {CONTAINER_NAME}/{version}/")
+    print(f" Latest path : {CONTAINER_NAME}/latest/")
     print(f"\n  Set this in your API environment:")
-    print(f"  MODEL_VERSION={version}")
+    print(f" MODEL_VERSION={version}")
 
     return version
 

@@ -30,17 +30,17 @@ except ImportError:
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 
 SAMPLE_PRODUCT = {
-    "product_id":        "P0042",
-    "current_price":     33.50,
-    "competitor_price":  29.69,
-    "inventory_level":   231,
-    "discount":          20,
+    "product_id": "P0042",
+    "current_price": 33.50,
+    "competitor_price": 29.69,
+    "inventory_level": 231,
+    "discount": 20,
     "holiday_promotion": 0,
-    "date":              "2026-04-13",
-    "category":          "Toys",
-    "region":            "North",
-    "weather":           "Rainy",
-    "season":            "Spring"
+    "date": "2026-04-13",
+    "category": "Toys",
+    "region": "North",
+    "weather": "Rainy",
+    "season": "Spring"
 }
 
 
@@ -48,9 +48,9 @@ def test(label, method, path, **kwargs):
     url = f"{API_URL}{path}"
     resp = getattr(requests, method)(url, **kwargs)
     status = "PASS" if resp.status_code < 400 else "FAIL"
-    print(f"  [{status}]  {method.upper()} {path}  →  {resp.status_code}")
+    print(f"[{status}]  {method.upper()} {path}  →  {resp.status_code}")
     if resp.status_code >= 400:
-        print(f"         {resp.text[:200]}")
+        print(f"{resp.text[:200]}")
     return resp
 
 
@@ -61,14 +61,14 @@ print("=" * 50)
 r = test("GET /health", "get", "/health")
 if r.status_code == 200:
     d = r.json()
-    print(f"         version={d.get('model_version')}  loaded_at={d.get('loaded_at')}")
+    print(f"version={d.get('model_version')}  loaded_at={d.get('loaded_at')}")
 
 # Info
 r = test("GET /info", "get", "/info")
 if r.status_code == 200:
     d = r.json()
-    print(f"         categories={d.get('valid_categories')}")
-    print(f"         regions={d.get('valid_regions')}")
+    print(f"categories={d.get('valid_categories')}")
+    print(f"regions={d.get('valid_regions')}")
 
 # Single price
 r = test("POST /price", "post", "/price",
@@ -76,9 +76,9 @@ r = test("POST /price", "post", "/price",
          headers={"Content-Type": "application/json"})
 if r.status_code == 200:
     d = r.json()
-    print(f"         recommended_price=${d.get('recommended_price')}")
-    print(f"         effective_price=${d.get('effective_price')}")
-    print(f"         multiplier={d.get('multiplier')}  action={d.get('action')}")
+    print(f"recommended_price=${d.get('recommended_price')}")
+    print(f"effective_price=${d.get('effective_price')}")
+    print(f"multiplier={d.get('multiplier')}  action={d.get('action')}")
 
 # Batch price
 batch_payload = {"products": [SAMPLE_PRODUCT, {**SAMPLE_PRODUCT, "product_id": "P0043", "discount": 0}]}
@@ -87,9 +87,9 @@ r = test("POST /price/batch", "post", "/price/batch",
          headers={"Content-Type": "application/json"})
 if r.status_code == 200:
     d = r.json()
-    print(f"         succeeded={d.get('succeeded')}  failed={d.get('failed')}")
+    print(f"succeeded={d.get('succeeded')}  failed={d.get('failed')}")
     for res in d.get("results", []):
-        print(f"         {res['product_id']}  →  ${res['recommended_price']}")
+        print(f"{res['product_id']}  →  ${res['recommended_price']}")
 
 # Validation error test
 r = test("POST /price (bad category)", "post", "/price",
